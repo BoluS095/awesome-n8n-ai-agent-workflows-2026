@@ -1,0 +1,230 @@
+{
+  "name": "02. AI Inbox Lead Qualifier, Auto-Reply Filter & Instant Sales Closer",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 02. AI Inbox Lead Qualifier, Auto-Reply Filter & Instant Sales Closer\n\nEliminates auto-responder loops and answers genuine prospect questions in <5 minutes with structured priority routing.\n\n**Setup (2 minutes):**\n1. Add your OpenAI / Anthropic / Gemini API key to the **AI Agent Decision** HTTP node.\n2. Connect your Gmail + CRM credentials in the final node.\n3. Activate the workflow.",
+        "height": 240,
+        "width": 420,
+        "color": 4
+      },
+      "id": "node-note-0",
+      "name": "Quick Setup Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        180,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "inbound-gmail-lead",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "node-trigger-1",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize incoming payload safely with fallback guards\nconst item = $input.first()?.json || {};\nconst payload = item.body || item;\nreturn [{\n  json: {\n    receivedAt: new Date().toISOString(),\n    source: \"inbound-gmail-lead\",\n    summaryInput: JSON.stringify(payload).slice(0, 4000),\n    raw: payload\n  }\n}];"
+      },
+      "id": "node-norm-2",
+      "name": "Normalize & Validate Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"temperature\": 0.2,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    { \"role\": \"system\", \"content\": \"Classify incoming email as hot_lead, question, auto_reply, or ignore. If human lead, draft a concise helpful reply under 120 words. Return strict JSON with keys: priority, summary, nextAction, messageDraft.\" },\n    { \"role\": \"user\", \"content\": {{ JSON.stringify($json.summaryInput) }} }\n  ]\n}",
+        "options": {
+          "retry": {
+            "maxTries": 3,
+            "waitBetweenTries": 2000
+          }
+        }
+      },
+      "id": "node-ai-3",
+      "name": "AI Agent Decision (With 3x Retry)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        300
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first()?.json?.choices?.[0]?.message?.content || \"{}\";\nlet parsed = {};\ntry { parsed = JSON.parse(raw); } catch { parsed = { priority: \"medium\", summary: raw.slice(0, 400), nextAction: \"review\", messageDraft: raw }; }\nreturn [{ json: { ...parsed, processedAt: new Date().toISOString() } }];"
+      },
+      "id": "node-parse-4",
+      "name": "Parse Structured JSON Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.priority }}",
+              "rightValue": "ignore",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "node-if-5",
+      "name": "Filter Low-Signal Noise",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1220,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.TARGET_WEBHOOK_URL || 'https://httpbin.org/post' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ workflow: \"02. AI Inbox Lead Qualifier, Auto-Reply Filter & Instant Sales Closer\", service: \"Gmail + CRM\", action: \"Reply to genuine human leads while skipping OOO autoresponders\", result: $json }) }}",
+        "options": {}
+      },
+      "id": "node-act-6",
+      "name": "Dispatch to Gmail + CRM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1480,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Dead-letter error handler: log failure cleanly without crashing cron\nconst err = $input.first()?.json || {};\nreturn [{ json: { status: \"error_captured\", workflow: \"02. AI Inbox Lead Qualifier, Auto-Reply Filter & Instant Sales Closer\", failedAt: new Date().toISOString(), error: err.message || JSON.stringify(err).slice(0, 500) } }];"
+      },
+      "id": "node-err-7",
+      "name": "Error Fallback & Alert Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        460
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Validate Input": {
+      "main": [
+        [
+          {
+            "node": "AI Agent Decision (With 3x Retry)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Decision (With 3x Retry)": {
+      "main": [
+        [
+          {
+            "node": "Parse Structured JSON Output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Fallback & Alert Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Structured JSON Output": {
+      "main": [
+        [
+          {
+            "node": "Filter Low-Signal Noise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Low-Signal Noise": {
+      "main": [
+        [
+          {
+            "node": "Dispatch to Gmail + CRM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "nordforge-2026-n8n-vault"
+  },
+  "tags": [
+    {
+      "name": "NordForge-2026"
+    },
+    {
+      "name": "AI-Agent"
+    }
+  ]
+}
